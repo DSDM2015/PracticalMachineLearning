@@ -1,0 +1,143 @@
+---
+# Coursera Data Science Specialization
+#Practical Machine Learning
+
+---
+## Introduction
+
+The project is on a data set that includes information about various body sensor measurements and the performance of an exercise. 6 participants were asked to perform one exercise in five different ways, only one of which was correct. The data is taken from the following:
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more about the data at http://groupware.les.inf.puc-rio.br/har#ixzz3yKhLl6bz
+
+The goal of the project is to build a good predictor for the classification of the exercise into the five categories.The original data set (pml-training.csv) has 19622 observations for 160 variables. Many of the variables contain little or not information, utltimately only about 50 variables will be used. However, the number of the variables is still relatively large. Also, interpretability is not the goal here, only predictive power. Finally, the aim is to classify several (more than two) categories. Thus, some forms of machine learning are either not feasible or impractical (e.g., logistic regression, naive Bayes). In general, ensemble methods perform well when it comes to predictions. Thus, the strategy will be to compute a decision tree first as a baseline model and to fit random forest models next. If the predictive power of random forest models is sufficient (classification error of less than 15%) the search would stop, otherwise other models (e.g., boosting, stacking predictors) will be considered. 
+
+## Pre-processing
+The data set contains 160 variables, however several are not relevant for the predictive tasks (e.g., observation ID, time stamp) and others do not contain much observation.
+
+As a quick look at the data shows, many variables have a large number of missing values.
+
+```{r, echo=FALSE, warning=F}
+library(foreign)
+library(caret)
+library(rattle)
+library(rpart.plot)
+library(randomForest)
+set.seed(1234)
+# Load data sets
+setwd("M:/Userdata/Current/Coursera/Machine learning")
+validation<-read.csv("pml-testing.csv", header=T)
+training<-read.csv("pml-training.csv", header=T)
+head(training)
+summary(training)
+```
+```{r}
+str(training)
+```
+
+The data is pre-processed by removing irrelevant variables and deleting variables with very low variance. In addition, variables with 25% or more of missing data are removed from the data set. 
+
+```{r}
+## Cleaning data
+# removing irrelevant variables (observation ID, time stamps, internal info)
+dim(training)
+training<-subset(training, select=-c(X, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window))
+dim(training)
+# Removing variables with nearly no variance
+NZVvariables<-nearZeroVar(training)
+training<-training[, -NZVvariables]
+dim(training)
+# Removing variables with more than 25% missing values
+training<-training[, colMeans(is.na(training))<.25]
+dim(training)
+summary(training)
+```
+
+This leaves 53 predictor variables. The outcome (classe) is relatively balanced (except for class A). Next, the data is split into a training (75% or 14 718 observations) and test (25% or 4 904 observations) data set.
+
+```{r}
+## Create seperate data frames (testing.df, training.df, training.complete, validation)
+# Split into training and testing data frames to build model
+train<-createDataPartition(y=training$classe, p=.75, list=F)
+training.df<-training[train, ]
+testing.df<-training[-train, ]
+dim(training.df)
+dim(testing.df)
+actual<-testing.df$classe
+training.complete<-training
+rm(training)
+```
+
+## Baseline model: a single decision tree
+
+As a baseline model, a single decision tree is computed.
+
+```{r}
+## Fitting a single Tree
+mod.tree<-train(classe~., method="rpart", data=training.df)
+print(mod.tree, digits=3)
+print(mod.tree$finalModel)
+fancyRpartPlot(mod.tree$finalModel)
+```
+
+The structure of the tree suggests a relatively straightforward prediction. Only a few variables were used and there seem to be no interaction effects. We can estimate the model's out-of-sample performance by computing the accuracy for the testing data, which was not used in training the tree. 
+
+```{r}
+# Using decision tree to predict testing data subset to estimate classification error
+pred.tree.testing<-predict(mod.tree, newdata=testing.df)
+actual.testing<-testing.df$classe
+confusionMatrix(pred.tree.testing, actual.testing)
+1-confusionMatrix(pred.tree.testing, actual.testing)$overall['Accuracy']
+```
+
+The classification error rate (i.e., 1 minus the accuracy/correct prediction) is quite high. Given that there are five groups, it is substantially better than a random guess, but there is room for improvement. Thus, a random forest model is used next to improve the predictive power.
+
+## Improving predictive power: fitting a random forest
+
+To improve predictive power, a random forest with 2500 trees is computed. A larger number of trees (e.g. 5000) did not improve the accuracy of the prediction (not reported). 
+
+```{r}
+## Random Forest
+mod.rf<-randomForest(classe~., data=training.df, ntree=2500)
+mod.rf
+
+# Random Forest (via caret)
+# Takes too long to be practical (even with parallel processing)
+#library(parallel)
+#library(doParallel)
+#cl <- makeCluster(4)
+#registerDoParallel(cl) 
+#mod.rf<-train(classe~., data=training.df, method="rf", metric="Accuracy", trControl=trainControl(method = "cv", number = 5), prox=T,  preProcess=c("scale", "center"), allowParallel=T)
+#print(mod.rf, digits=3)
+#stopCluster(cl)
+#registerDoSEQ()
+```
+
+Again, the classification error rate is estimated using the testing data to avoid an overestimate of the accuracy due to overfitting of the training data.
+
+
+```{r}
+# Using random forest model to predict testing data subset to estimate classification error
+pred.rf.testing<-predict(mod.rf, newdata=testing.df)
+actual.testing<-testing.df$classe
+confusionMatrix(pred.rf.testing, actual.testing)
+1-confusionMatrix(pred.rf.testing, actual.testing)$overall['Accuracy']
+```
+
+The random forest performs a lot better than the single decision tree. The prediction of the error rate based on out-of-bag predictions is less than 1%. Given this highly predictive model, the model building exercise can be stopped and we proceed to predict new data for the validation data set. Predicting the test data set also yields an estimated prediction error of less than 1%. 
+
+## Predicting new data: using the validation data
+
+Finally, the random forest model is used to predict the classes for the validation data set. Given the high out-of-bag and test error rate, we can be quite confident that we reach very high predictive power for the validation data.   
+
+
+```{r}
+## Predicting validation data 
+# Getting better predictions by using complete training data set to fit random forest model
+mod.rf.complete<-randomForest(classe~., data=training.complete, ntree=2500)
+mod.rf.complete
+# Making predictions
+pred.rf.validation<-predict(mod.rf.complete, newdata=validation, type="class")
+pred.rf.validation
+```
